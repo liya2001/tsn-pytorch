@@ -1,12 +1,14 @@
 import argparse
 parser = argparse.ArgumentParser(description="PyTorch implementation of Temporal Segment Networks")
-parser.add_argument('dataset', type=str, choices=['ucf101', 'hmdb51', 'kinetics'])
+parser.add_argument('dataset', type=str, choices=['virat', 'ucf101', 'hmdb51', 'kinetics'])
 parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
-parser.add_argument('train_list', type=str)
-parser.add_argument('val_list', type=str)
+parser.add_argument('--data_path', default='../data/candidate_region', metavar='DIR',
+                    help='path to dataset')
 
 # ========================= Model Configs ==========================
+parser.add_argument('--pretrained_weights', type=str, default='./models/pretrained/kinetics_flow.pth')
 parser.add_argument('--arch', type=str, default="resnet101")
+parser.add_argument('--mode', type=str, default='train', help='mode')
 parser.add_argument('--num_segments', type=int, default=3)
 parser.add_argument('--consensus_type', type=str, default='avg',
                     choices=['avg', 'max', 'topk', 'identity', 'rnn', 'cnn'])
@@ -20,7 +22,7 @@ parser.add_argument('--loss_type', type=str, default="nll",
 # ========================= Learning Configs ==========================
 parser.add_argument('--epochs', default=45, type=int, metavar='N',
                     help='number of total epochs to run')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate')

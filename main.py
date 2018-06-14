@@ -13,6 +13,7 @@ from dataset import TSNDataSet
 from models import TSN
 from transforms import *
 from opts import parser
+from ops.network import load_pretrain
 
 best_prec1 = 0
 
@@ -27,12 +28,26 @@ def main():
         num_class = 51
     elif args.dataset == 'kinetics':
         num_class = 400
+    elif args.datase == 'virat':
+        num_class = 8
     else:
         raise ValueError('Unknown dataset '+args.dataset)
 
     model = TSN(num_class, args.num_segments, args.modality,
                 base_model=args.arch,
                 consensus_type=args.consensus_type, dropout=args.dropout, partial_bn=not args.no_partialbn)
+
+    # load pretrained kinetics model
+    load_pretrain(model, args.pretrained_weights)
+    param_count = 0
+    for n, param in model.named_parameters():
+        param_count += 1
+        # freeze first four layer
+        if n.startswith('base_model.inception_5') or n.startswith('new_fc'):
+            pass
+        else:
+            param.requires_grad = False
+        print(param_count, n, param.requires_grad, param.size())
 
     crop_size = model.crop_size
     scale_size = model.scale_size
@@ -65,14 +80,13 @@ def main():
 
     if args.modality == 'RGB':
         data_length = 1
-    elif args.modality in ['Flow', 'RGBDiff']:
+    else:  # args.modality in ['Flow', 'RGBDiff']:
         data_length = 5
 
     train_loader = torch.utils.data.DataLoader(
-        TSNDataSet("", args.train_list, num_segments=args.num_segments,
+        TSNDataSet(args.data_path, "train", num_segments=args.num_segments,
                    new_length=data_length,
                    modality=args.modality,
-                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix+"{}_{:05d}.jpg",
                    transform=torchvision.transforms.Compose([
                        train_augmentation,
                        Stack(roll=args.arch == 'BNInception'),
@@ -83,10 +97,9 @@ def main():
         num_workers=args.workers, pin_memory=True)
 
     val_loader = torch.utils.data.DataLoader(
-        TSNDataSet("", args.val_list, num_segments=args.num_segments,
+        TSNDataSet(args.data_path, 'val', num_segments=args.num_segments,
                    new_length=data_length,
                    modality=args.modality,
-                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix+"{}_{:05d}.jpg",
                    random_shift=False,
                    transform=torchvision.transforms.Compose([
                        GroupScale(int(scale_size)),
@@ -171,7 +184,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
         losses.update(loss.data[0], input.size(0))
         top1.update(prec1[0], input.size(0))
         top5.update(prec5[0], input.size(0))
-
 
         # compute gradient and do SGD step
         optimizer.zero_grad()

@@ -4,6 +4,7 @@ from ops.basic_ops import ConsensusModule, Identity
 from transforms import *
 from torch.nn.init import normal, constant
 
+
 class TSN(nn.Module):
     def __init__(self, num_class, num_segments, modality,
                  base_model='resnet101', new_length=None,
@@ -223,7 +224,6 @@ TSN Configurations:
 
         return new_data
 
-
     def _construct_flow_model(self, base_model):
         # modify the convolution layers
         # Torch models are usually defined in a hierarchical way.
@@ -244,10 +244,10 @@ TSN Configurations:
                              bias=True if len(params) == 2 else False)
         new_conv.weight.data = new_kernels
         if len(params) == 2:
-            new_conv.bias.data = params[1].data # add bias if neccessary
-        layer_name = list(container.state_dict().keys())[0][:-7] # remove .weight suffix to get the layer name
+            new_conv.bias.data = params[1].data  # add bias if necessary
+        layer_name = list(container.state_dict().keys())[0][:-7]  # remove .weight suffix to get the layer name
 
-        # replace the first convlution layer
+        # replace the first convolution layer
         setattr(container, layer_name, new_conv)
         return base_model
 
