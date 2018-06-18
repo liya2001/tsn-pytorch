@@ -25,16 +25,16 @@ if __name__ == '__main__':
     data_path = '/home/liya/workspace/trecvid/data/candidate_region'
     save_path = '/home/liya/workspace/trecvid/tsn-pytorch/data'
 
-    train_rgb = os.path.join(data_path, 'train/gt_activities')
+    train_rgb = os.path.join(data_path, 'train/gt_activities2')
     build_list(train_rgb, os.path.join(save_path, 'train_rgb.txt'))
 
-    train_flow = os.path.join(data_path, 'train/gt_acts_opt_flow')
+    train_flow = os.path.join(data_path, 'train/gt_acts_opt_flow2')
     build_list(train_flow, os.path.join(save_path, 'train_flow.txt'), flow=True)
 
-    val_rgb = os.path.join(data_path, 'val/gt_activities')
+    val_rgb = os.path.join(data_path, 'val/gt_activities2')
     build_list(val_rgb, os.path.join(save_path, 'val_rgb.txt'))
 
-    val_flow = os.path.join(data_path, 'val/gt_acts_opt_flow')
+    val_flow = os.path.join(data_path, 'val/gt_acts_opt_flow2')
     build_list(val_flow, os.path.join(save_path, 'val_flow.txt'), flow=True)
 
 

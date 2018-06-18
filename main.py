@@ -7,13 +7,13 @@ import torchvision
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
-from torch.nn.utils import clip_grad_norm
+from torch.nn.utils import clip_grad_norm_
 
 from dataset import TSNDataSet
 from models import TSN
 from transforms import *
 from opts import parser
-from ops.network import load_pretrain
+from ops.network import load_pretrain, remove_freezed_params
 
 best_prec1 = 0
 
@@ -28,7 +28,7 @@ def main():
         num_class = 51
     elif args.dataset == 'kinetics':
         num_class = 400
-    elif args.datase == 'virat':
+    elif args.dataset == 'virat':
         num_class = 8
     else:
         raise ValueError('Unknown dataset '+args.dataset)
@@ -40,13 +40,16 @@ def main():
     # load pretrained kinetics model
     load_pretrain(model, args.pretrained_weights)
     param_count = 0
+    grad_layers = [3, 4, 5]
     for n, param in model.named_parameters():
         param_count += 1
         # freeze first four layer
-        if n.startswith('base_model.inception_5') or n.startswith('new_fc'):
+        if n.startswith('base_model.inception_4') or n.startswith('base_model.inception_5') \
+                or n.startswith('new_fc'):
             pass
         else:
-            param.requires_grad = False
+            pass
+            # param.requires_grad = False
         print(param_count, n, param.requires_grad, param.size())
 
     crop_size = model.crop_size
@@ -66,7 +69,7 @@ def main():
             best_prec1 = checkpoint['best_prec1']
             model.load_state_dict(checkpoint['state_dict'])
             print(("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.evaluate, checkpoint['epoch'])))
+                  .format(args.resume, checkpoint['epoch'])))
         else:
             print(("=> no checkpoint found at '{}'".format(args.resume)))
 
@@ -117,6 +120,8 @@ def main():
     else:
         raise ValueError("Unknown loss type")
 
+    policies = remove_freezed_params(policies)
+
     for group in policies:
         print(('group: {} has {} params, lr_mult: {}, decay_mult: {}'.format(
             group['name'], len(group['params']), group['lr_mult'], group['decay_mult'])))
@@ -156,7 +161,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-    top5 = AverageMeter()
+    top2 = AverageMeter()
 
     if args.no_partialbn:
         model.module.partialBN(False)
@@ -180,10 +185,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
         loss = criterion(output, target_var)
 
         # measure accuracy and record loss
-        prec1, prec5 = accuracy(output.data, target, topk=(1,5))
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
+        prec1, prec2 = accuracy(output.data, target, topk=(1, 2))
+        losses.update(loss.item(), input.size(0))
+        top1.update(prec1.item(), input.size(0))
+        top2.update(prec2.item(), input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -191,7 +196,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         loss.backward()
 
         if args.clip_gradient is not None:
-            total_norm = clip_grad_norm(model.parameters(), args.clip_gradient)
+            total_norm = clip_grad_norm_(model.parameters(), args.clip_gradient)
             if total_norm > args.clip_gradient:
                 print("clipping gradient: {} with coef {}".format(total_norm, args.clip_gradient / total_norm))
 
@@ -207,16 +212,16 @@ def train(train_loader, model, criterion, optimizer, epoch):
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                  'Prec@2 {top2.val:.3f} ({top2.avg:.3f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, top1=top1, top5=top5, lr=optimizer.param_groups[-1]['lr'])))
+                   data_time=data_time, loss=losses, top1=top1, top2=top2, lr=optimizer.param_groups[-1]['lr'])))
 
 
 def validate(val_loader, model, criterion, iter, logger=None):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-    top5 = AverageMeter()
+    top2 = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
@@ -224,19 +229,19 @@ def validate(val_loader, model, criterion, iter, logger=None):
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
+        input_var = torch.autograd.Variable(input)
+        target_var = torch.autograd.Variable(target)
 
         # compute output
         output = model(input_var)
         loss = criterion(output, target_var)
 
         # measure accuracy and record loss
-        prec1, prec5 = accuracy(output.data, target, topk=(1,5))
+        prec1, prec2 = accuracy(output.data, target, topk=(1, 2))
 
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
+        losses.update(loss.item(), input.size(0))
+        top1.update(prec1.item(), input.size(0))
+        top2.update(prec2.item(), input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -247,12 +252,12 @@ def validate(val_loader, model, criterion, iter, logger=None):
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                  'Prec@5 {top2.val:.3f} ({top2.avg:.3f})'.format(
                    i, len(val_loader), batch_time=batch_time, loss=losses,
-                   top1=top1, top5=top5)))
+                   top1=top1, top2=top2)))
 
-    print(('Testing Results: Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Loss {loss.avg:.5f}'
-          .format(top1=top1, top5=top5, loss=losses)))
+    print(('Testing Results: Prec@1 {top1.avg:.3f} (Best:{best_prec1:.3f}) Prec@2 {top2.avg:.3f} Loss {loss.avg:.5f}'
+          .format(top1=top1, best_prec1=best_prec1, top2=top2, loss=losses)))
 
     return top1.avg
 

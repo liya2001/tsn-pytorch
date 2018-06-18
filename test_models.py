@@ -1,23 +1,32 @@
 import argparse
 import time
+import os
 
 import numpy as np
+import pandas as pd
 import torch.nn.parallel
 import torch.optim
+from torchvision import transforms
 from sklearn.metrics import confusion_matrix
 
 from dataset import TSNDataSet
 from models import TSN
 from transforms import *
 from ops import ConsensusModule
+from ops.network import load_pretrain
+import ipdb
 
 # options
 parser = argparse.ArgumentParser(
     description="Standard video-level testing")
-parser.add_argument('dataset', type=str, choices=['ucf101', 'hmdb51', 'kinetics'])
+
 parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
-parser.add_argument('test_list', type=str)
-parser.add_argument('weights', type=str)
+parser.add_argument('resume', type=str)
+
+parser.add_argument('--dataset', type=str, default='virat', choices=['virat', 'ucf101', 'hmdb51', 'kinetics'])
+parser.add_argument('--data_path', default='../data/candidate_region', metavar='DIR',
+                    help='path to dataset')
+parser.add_argument('--mode', type=str, default='val', help='mode')
 parser.add_argument('--arch', type=str, default="resnet101")
 parser.add_argument('--save_scores', type=str, default=None)
 parser.add_argument('--test_segments', type=int, default=25)
@@ -28,8 +37,8 @@ parser.add_argument('--crop_fusion_type', type=str, default='avg',
                     choices=['avg', 'max', 'topk'])
 parser.add_argument('--k', type=int, default=3)
 parser.add_argument('--dropout', type=float, default=0.7)
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
-                    help='number of data loading workers (default: 4)')
+parser.add_argument('-j', '--workers', default=1, type=int, metavar='N',
+                    help='number of data loading workers (default: 1)')
 parser.add_argument('--gpus', nargs='+', type=int, default=None)
 parser.add_argument('--flow_prefix', type=str, default='')
 
@@ -42,43 +51,43 @@ elif args.dataset == 'hmdb51':
     num_class = 51
 elif args.dataset == 'kinetics':
     num_class = 400
+elif args.dataset == 'virat':
+    num_class = 8
 else:
     raise ValueError('Unknown dataset '+args.dataset)
 
+# ipdb.set_trace()
 net = TSN(num_class, 1, args.modality,
           base_model=args.arch,
           consensus_type=args.crop_fusion_type,
           dropout=args.dropout)
 
-checkpoint = torch.load(args.weights)
-print("model epoch {} best prec@1: {}".format(checkpoint['epoch'], checkpoint['best_prec1']))
-
-base_dict = {'.'.join(k.split('.')[1:]): v for k,v in list(checkpoint['state_dict'].items())}
-net.load_state_dict(base_dict)
+param_count = 0
+for n, param in net.named_parameters():
+    param_count += 1
+    print(param_count, n, param.requires_grad, param.size())
 
 if args.test_crops == 1:
-    cropping = torchvision.transforms.Compose([
+    cropping = transforms.Compose([
         GroupScale(net.scale_size),
-        GroupCenterCrop(net.input_size),
+        GroupCenterCrop(net.input_size)
     ])
 elif args.test_crops == 10:
-    cropping = torchvision.transforms.Compose([
+    cropping = transforms.Compose([
         GroupOverSample(net.input_size, net.scale_size)
     ])
 else:
     raise ValueError("Only 1 and 10 crops are supported while we got {}".format(args.test_crops))
 
 data_loader = torch.utils.data.DataLoader(
-        TSNDataSet("", args.test_list, num_segments=args.test_segments,
+        TSNDataSet(args.data_path, args.mode, num_segments=args.test_segments,
                    new_length=1 if args.modality == "RGB" else 5,
                    modality=args.modality,
-                   image_tmpl="img_{:05d}.jpg" if args.modality in ['RGB', 'RGBDiff'] else args.flow_prefix+"{}_{:05d}.jpg",
-                   test_mode=True,
-                   transform=torchvision.transforms.Compose([
+                   transform=transforms.Compose([
                        cropping,
                        Stack(roll=args.arch == 'BNInception'),
                        ToTorchFormatTensor(div=args.arch != 'BNInception'),
-                       GroupNormalize(net.input_mean, net.input_std),
+                       GroupNormalize(net.input_mean, net.input_std)
                    ])),
         batch_size=1, shuffle=False,
         num_workers=args.workers * 2, pin_memory=True)
@@ -87,9 +96,27 @@ if args.gpus is not None:
     devices = [args.gpus[i] for i in range(args.workers)]
 else:
     devices = list(range(args.workers))
+print(devices)
 
 
 net = torch.nn.DataParallel(net.cuda(devices[0]), device_ids=devices)
+
+if args.resume:
+    if os.path.isfile(args.resume):
+        print(("=> loading checkpoint '{}'".format(args.resume)))
+        checkpoint = torch.load(args.resume)
+        args.start_epoch = checkpoint['epoch']
+        best_prec1 = checkpoint['best_prec1']
+        net.load_state_dict(checkpoint['state_dict'])
+        print(("=> loaded checkpoint '{}' (epoch {})"
+               .format(args.resume, checkpoint['epoch'])))
+    else:
+        print(("=> no checkpoint found at '{}'".format(args.resume)))
+
+# ToDo: why
+# if len(devices) > 1:  # cause bug
+#     device = torch.device('cuda:{}'.format(devices[0]))
+#     net = net.to(device)
 net.eval()
 
 data_gen = enumerate(data_loader)
@@ -111,12 +138,10 @@ def eval_video(video_data):
     else:
         raise ValueError("Unknown modality "+args.modality)
 
-    input_var = torch.autograd.Variable(data.view(-1, length, data.size(2), data.size(3)),
-                                        volatile=True)
-    rst = net(input_var).data.cpu().numpy().copy()
+    input_tensor = data.view(-1, length, data.size(2), data.size(3))
+    rst = net(input_tensor).data.cpu().numpy().copy()
     return i, rst.reshape((num_crop, args.test_segments, num_class)).mean(axis=0).reshape(
-        (args.test_segments, 1, num_class)
-    ), label[0]
+        (args.test_segments, 1, num_class)), label[0]
 
 
 proc_start_time = time.time()
@@ -141,7 +166,8 @@ cf = confusion_matrix(video_labels, video_pred).astype(float)
 
 cls_cnt = cf.sum(axis=1)
 cls_hit = np.diag(cf)
-
+print('cls_hit:', cls_hit)
+print('cls_cnt:', cls_cnt)
 cls_acc = cls_hit / cls_cnt
 
 print(cls_acc)
@@ -149,7 +175,14 @@ print(cls_acc)
 print('Accuracy {:.02f}%'.format(np.mean(cls_acc) * 100))
 
 if args.save_scores is not None:
-
+    from config import get_list_file
+    test_list_file = get_list_file('val', args.modality)
+    test_df = pd.read_csv(test_list_file, sep=' ', header=None)
+    test_df.columns = ['activity', 'length', 'label', 'offset']
+    test_df['activity'] = test_df['activity'].map(lambda v: '-'.join(v.split('/')[2:]))
+    test_df['pred'] = video_pred
+    test_df.to_csv(args.save_scores, index=False)
+    '''
     # reorder before saving
     name_list = [x.strip().split()[0] for x in open(args.test_list)]
 
@@ -164,5 +197,4 @@ if args.save_scores is not None:
         reorder_label[idx] = video_labels[i]
 
     np.savez(args.save_scores, scores=reorder_output, labels=reorder_label)
-
-
+    '''

@@ -27,7 +27,7 @@ then
         # kill process and free GPU memory
         # # Always double semicolon
         [Yy]* ) `ps aux | grep -ie "$py_script_name" | awk '{print $2}' | xargs kill -9`;
-            echo "\n$main_process_pid is killed";;
+            echo -e "\n$main_process_pid is killed";;
         [Nn]* ) exit;;
         * ) exit;;
     esac
