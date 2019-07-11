@@ -62,3 +62,11 @@ python test_models.py ucf101 Flow <ucf101_rgb_val_list> ucf101_bninception_flow_
    --arch BNInception --save_scores <score_file_name> --flow_pref flow_
 
 ```
+
+### Error and solution
+
+```
+Dimensions in model doesn't match the dimensions in the checkpoint
+```
+
+Solution: comment out [this line](https://github.com/yjxiong/tensorflow-model-zoo.torch/blob/e31e0b7aa451e2c12c0107e616953a03d8cd0d47/bninception/pytorch_load.py#L35)
